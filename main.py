@@ -9,6 +9,11 @@ from decimal import *
 # endregion
 
 
+# Globals                  
+PT = 0.005 # percent
+SL = 0.005 # percent
+
+
 class Trialcode(QCAlgorithm):
 
     def Initialize(self):
@@ -115,6 +120,67 @@ class Trialcode(QCAlgorithm):
         self.new_day = True
 
     def OnOrderEvent(self, orderEvent):
-        if orderEvent.Status != OrderStatus.Filled:
+        """
+        This function is triggered automatically every time an order event occurs.
+        """
+        
+        self.Log(str(orderEvent))  
+        
+        if OrderStatusCodes[orderEvent.Status] == 'Submitted':
             return
 
+        k = str(orderEvent.Symbol.Value)
+        symbol = str(orderEvent.Symbol)
+        
+        if (not k in self.order_tickets.keys()): 
+            self.Log('missing key in order tickets: {}'.format(k))
+            self.Log('order tickets keys: {}'.format(self.order_tickets.keys()))
+            return
+        
+        elif (k in self.order_tickets.keys()):
+        
+            orderData = self.order_tickets[k]
+            orig_order_id = orderData.ticket.OrderId
+            order = self.Transactions.GetOrderTicket(orig_order_id)
+            
+            # sometimes order is nonetype due to security price
+            # is equal to zero
+            #------------------------------------------------------#
+            if not order: 
+                self.Log('order is nonetype: {}'.format(k))
+                del self.order_tickets[k] # delete order ticket data  
+                return
+                
+            # if order is filled but bracket order not submitted,
+            # submit bracket order
+            #------------------------------------------------------#
+            if (OrderStatusCodes[order.Status]=='Filled') and \
+                (not orderData.bracket_submit):
+                    
+                if (orderEvent.OrderId == orig_order_id):
+            
+                    price = orderEvent.FillPrice
+                    qty = orderEvent.FillQuantity
+                    #qty = self.CalculateOrderQuantity(k, 0.0)
+                    
+                    profit_target = price * d.Decimal(1+PT)
+                    limitTicket = self.LimitOrder(symbol, -1*qty, profit_target)
+                    self.order_tickets[k].add_limit_order(limitTicket)
+                    
+                    stop_loss = price * d.Decimal(1-SL)
+                    stopTicket = self.StopMarketOrder(symbol, -1*qty, stop_loss)
+                    self.order_tickets[k].add_stop_market_order(stopTicket)
+                    
+                    self.order_tickets[k].is_bracket()
+                    
+                    self.Log('bracket order submitted: {}'.format(self.Time, k))
+                    
+            # Otherwise, one of the exit orders was filled,
+            # so cancel the open orders
+            #------------------------------------------------------#
+            elif (orderData.bracket_submit) and \
+                (OrderStatusCodes[orderEvent.Status]=='Filled'):
+                self.Log('cancelling bracket orders for: {}'.format(self.Time, k))
+                self.Transactions.CancelOpenOrders(symbol)
+                self.order_tickets[k].bracket_submit=False
+                del self.order_tickets[k]    
